@@ -1,4 +1,6 @@
-﻿using System.Text;
+﻿using secure_player.Playback;
+using System.IO;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -19,6 +21,71 @@ namespace secure_player
         public MainWindow()
         {
             InitializeComponent();
+        }
+
+        private FFmpegMemoryVideoPlayer? _player;
+        private WriteableBitmap? _bitmap;
+
+        private async void Window_Loaded(object sender, RoutedEventArgs e)
+        {
+            byte[] bytes = await File.ReadAllBytesAsync("C:\\Users\\M\\Desktop\\hevc_4k25P_main_2.mp4");
+
+            _player = new FFmpegMemoryVideoPlayer();
+            _player.FrameReady += OnFrameReady;
+
+            await _player.OpenAsync(bytes);
+        }
+
+        private void OnFrameReady(object? sender, VideoFrame frame)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                if (_bitmap == null ||
+                    _bitmap.PixelWidth != frame.Width ||
+                    _bitmap.PixelHeight != frame.Height)
+                {
+                    _bitmap = new WriteableBitmap(
+                        frame.Width,
+                        frame.Height,
+                        96,
+                        96,
+                        PixelFormats.Bgra32,
+                        null);
+
+                    VideoImage.Source = _bitmap;
+                }
+
+                _bitmap.WritePixels(
+                    new Int32Rect(0, 0, frame.Width, frame.Height),
+                    frame.BgraBuffer,
+                    frame.Stride,
+                    0);
+            });
+        }
+
+        private void PlayButton_Click(object sender, RoutedEventArgs e)
+        {
+            _player?.Play();
+        }
+
+        private void PauseButton_Click(object sender, RoutedEventArgs e)
+        {
+            _player?.Pause();
+        }
+
+        private void Speed1xButton_Click(object sender, RoutedEventArgs e)
+        {
+            _player?.SetSpeed(1.0);
+        }
+
+        private void Speed2xButton_Click(object sender, RoutedEventArgs e)
+        {
+            _player?.SetSpeed(2.0);
+        }
+
+        private void Speed4xButton_Click(object sender, RoutedEventArgs e)
+        {
+            _player?.SetSpeed(4.0);
         }
     }
 }

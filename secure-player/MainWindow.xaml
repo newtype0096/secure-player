@@ -8,6 +8,7 @@
     Title="MainWindow"
     Width="800"
     Height="450"
+    Loaded="Window_Loaded"
     mc:Ignorable="d">
     <Grid>
         <Grid.RowDefinitions>
@@ -15,7 +16,7 @@
             <RowDefinition />
         </Grid.RowDefinitions>
 
-        <Image />
+        <Image x:Name="VideoImage" Stretch="Uniform" />
 
         <Grid Grid.Row="1">
             <Grid.RowDefinitions>
@@ -33,12 +34,35 @@
                     <ColumnDefinition />
                 </Grid.ColumnDefinitions>
 
-                <Button Grid.Column="0" Content="재생" />
-                <Button Grid.Column="1" Content="일시정지" />
-                <Button Grid.Column="2" Content="정지" />
-                <Button Grid.Column="3" Content="1x" />
-                <Button Grid.Column="4" Content="2x" />
-                <Button Grid.Column="5" Content="4x" />
+                <Button
+                    x:Name="PlayButton"
+                    Grid.Column="0"
+                    Click="PlayButton_Click"
+                    Content="재생" />
+                <Button
+                    x:Name="PauseButton"
+                    Grid.Column="1"
+                    Click="PauseButton_Click"
+                    Content="일시정지" />
+                <Button
+                    x:Name="StopButton"
+                    Grid.Column="2"
+                    Content="정지" />
+                <Button
+                    x:Name="Speed1xButton"
+                    Grid.Column="3"
+                    Click="Speed1xButton_Click"
+                    Content="1x" />
+                <Button
+                    x:Name="Speed2xButton"
+                    Grid.Column="4"
+                    Click="Speed2xButton_Click"
+                    Content="2x" />
+                <Button
+                    x:Name="Speed4xButton"
+                    Grid.Column="5"
+                    Click="Speed4xButton_Click"
+                    Content="4x" />
             </Grid>
 
             <Slider Grid.Row="1" VerticalAlignment="Center" />
