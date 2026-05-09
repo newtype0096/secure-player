@@ -26,6 +26,8 @@ namespace secure_player
         private FFmpegMemoryVideoPlayer? _player;
         private WriteableBitmap? _bitmap;
 
+        private bool _isDraggingSlider;
+
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
             byte[] bytes = await File.ReadAllBytesAsync("C:\\Users\\M\\Desktop\\hevc_4k25P_main_2.mp4");
@@ -34,6 +36,22 @@ namespace secure_player
             _player.FrameReady += OnFrameReady;
 
             await _player.OpenAsync(bytes);
+
+            PositionSlider.Maximum = _player.Duration.TotalSeconds;
+            PositionSlider.Value = 0;
+
+            _player.PositionChanged += OnPositionChanged;
+        }
+
+        private void OnPositionChanged(object? sender, TimeSpan position)
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (_isDraggingSlider)
+                    return;
+
+                PositionSlider.Value = position.TotalSeconds;
+            });
         }
 
         private void OnFrameReady(object? sender, VideoFrame frame)
@@ -91,6 +109,26 @@ namespace secure_player
         private void Speed4xButton_Click(object sender, RoutedEventArgs e)
         {
             _player?.SetSpeed(4.0);
+        }
+
+        private void PositionSlider_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+        {
+            _isDraggingSlider = true;
+        }
+
+        private async void PositionSlider_PreviewMouseUp(object sender, MouseButtonEventArgs e)
+        {
+            _isDraggingSlider = false;
+
+            if (_player == null)
+                return;
+
+            await _player.SeekAsync(TimeSpan.FromSeconds(PositionSlider.Value));
+        }
+
+        private void PositionSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+
         }
     }
 }

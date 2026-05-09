@@ -32,6 +32,8 @@ namespace secure_player.Playback
         private bool _isOpened;
         private bool _reachedEnd;
 
+        private readonly object _ffmpegLock = new();
+
         public TimeSpan Duration { get; private set; }
         public TimeSpan Position { get; private set; }
         public bool IsPlaying => _isPlaying;
@@ -164,14 +166,17 @@ namespace secure_player.Playback
 
             long timestamp = (long)(position.TotalSeconds / ffmpeg.av_q2d(_formatContext->streams[_videoStreamIndex]->time_base));
 
-            int result = ffmpeg.av_seek_frame(
-                _formatContext,
-                _videoStreamIndex,
-                timestamp,
-                ffmpeg.AVSEEK_FLAG_BACKWARD);
+            lock (_ffmpegLock)
+            {
+                int result = ffmpeg.av_seek_frame(
+                    _formatContext,
+                    _videoStreamIndex,
+                    timestamp,
+                    ffmpeg.AVSEEK_FLAG_BACKWARD);
 
-            ThrowIfError(result);
-            ffmpeg.avcodec_flush_buffers(_codecContext);
+                ThrowIfError(result);
+                ffmpeg.avcodec_flush_buffers(_codecContext);
+            }
 
             Position = position;
             PositionChanged?.Invoke(this, Position);
@@ -241,66 +246,69 @@ namespace secure_player.Playback
 
                     while (!cancellationToken.IsCancellationRequested)
                     {
-                        int readResult = ffmpeg.av_read_frame(_formatContext, packet);
-
-                        if (readResult == ffmpeg.AVERROR_EOF)
+                        lock (_ffmpegLock)
                         {
-                            _reachedEnd = true;
-                            break;
-                        }
+                            int readResult = ffmpeg.av_read_frame(_formatContext, packet);
 
-                        if (readResult < 0)
-                            break;
-
-                        try
-                        {
-                            if (packet->stream_index != _videoStreamIndex)
-                                continue;
-
-                            ThrowIfError(ffmpeg.avcodec_send_packet(_codecContext, packet));
-
-                            while (!cancellationToken.IsCancellationRequested)
+                            if (readResult == ffmpeg.AVERROR_EOF)
                             {
-                                int receiveResult = ffmpeg.avcodec_receive_frame(_codecContext, frame);
-
-                                if (receiveResult == ffmpeg.AVERROR(ffmpeg.EAGAIN) ||
-                                    receiveResult == ffmpeg.AVERROR_EOF)
-                                    break;
-
-                                ThrowIfError(receiveResult);
-
-                                ffmpeg.sws_scale(
-                                    swsContext,
-                                    frame->data,
-                                    frame->linesize,
-                                    0,
-                                    height,
-                                    dstData,
-                                    dstLinesize);
-
-                                byte[] copy = new byte[bufferSize];
-                                Buffer.BlockCopy(managedBuffer, 0, copy, 0, bufferSize);
-
-                                TimeSpan timestamp = GetFrameTimestamp(frame);
-
-                                Position = timestamp;
-                                PositionChanged?.Invoke(this, Position);
-
-                                FrameReady?.Invoke(this, new VideoFrame
-                                {
-                                    BgraBuffer = copy,
-                                    Width = width,
-                                    Height = height,
-                                    Stride = stride,
-                                    Timestamp = timestamp
-                                });
-
-                                Thread.Sleep(TimeSpan.FromMilliseconds(33 / _speed));
+                                _reachedEnd = true;
+                                break;
                             }
-                        }
-                        finally
-                        {
-                            ffmpeg.av_packet_unref(packet);
+
+                            if (readResult < 0)
+                                break;
+
+                            try
+                            {
+                                if (packet->stream_index != _videoStreamIndex)
+                                    continue;
+
+                                ThrowIfError(ffmpeg.avcodec_send_packet(_codecContext, packet));
+
+                                while (!cancellationToken.IsCancellationRequested)
+                                {
+                                    int receiveResult = ffmpeg.avcodec_receive_frame(_codecContext, frame);
+
+                                    if (receiveResult == ffmpeg.AVERROR(ffmpeg.EAGAIN) ||
+                                        receiveResult == ffmpeg.AVERROR_EOF)
+                                        break;
+
+                                    ThrowIfError(receiveResult);
+
+                                    ffmpeg.sws_scale(
+                                        swsContext,
+                                        frame->data,
+                                        frame->linesize,
+                                        0,
+                                        height,
+                                        dstData,
+                                        dstLinesize);
+
+                                    byte[] copy = new byte[bufferSize];
+                                    Buffer.BlockCopy(managedBuffer, 0, copy, 0, bufferSize);
+
+                                    TimeSpan timestamp = GetFrameTimestamp(frame);
+
+                                    Position = timestamp;
+                                    PositionChanged?.Invoke(this, Position);
+
+                                    FrameReady?.Invoke(this, new VideoFrame
+                                    {
+                                        BgraBuffer = copy,
+                                        Width = width,
+                                        Height = height,
+                                        Stride = stride,
+                                        Timestamp = timestamp
+                                    });
+
+                                    Thread.Sleep(TimeSpan.FromMilliseconds(33 / _speed));
+                                }
+                            }
+                            finally
+                            {
+                                ffmpeg.av_packet_unref(packet);
+                            }
                         }
                     }
                 }
