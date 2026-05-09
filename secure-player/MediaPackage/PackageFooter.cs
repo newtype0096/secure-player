@@ -9,5 +9,7 @@ namespace secure_player.MediaPackage
         long MetadataOffset,
         long MetadataLength,
         long VideoOffset,
-        long VideoLength);
+        long VideoLength,
+        long HashOffset,
+        long HashLength);
 }

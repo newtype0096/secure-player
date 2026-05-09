@@ -2,6 +2,7 @@
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -38,11 +39,19 @@ namespace secure_player.MediaPackage
             long metadataLength = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(24, 8));
             long videoOffset = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(32, 8));
             long videoLength = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(40, 8));
+            long hashOffset = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(48, 8));
+            long hashLength = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(56, 8));
+
+            if (hashLength != PackageConstants.Sha256HashSize)
+                return false;
 
             if (!IsValidRange(metadataOffset, metadataLength, stream.Length))
                 return false;
 
             if (!IsValidRange(videoOffset, videoLength, stream.Length))
+                return false;
+
+            if (!IsValidRange(hashOffset, hashLength, stream.Length))
                 return false;
 
             long packageEnd = stream.Length - PackageConstants.FooterSize;
@@ -53,11 +62,18 @@ namespace secure_player.MediaPackage
             if (videoOffset + videoLength > packageEnd)
                 return false;
 
+            if (hashOffset + hashLength > packageEnd)
+                return false;
+
             if (metadataLength > int.MaxValue || videoLength > int.MaxValue)
                 throw new InvalidOperationException("Package section is too large for current loader.");
 
             byte[] metadataBytes = ReadRange(stream, metadataOffset, (int)metadataLength);
             byte[] videoBytes = ReadRange(stream, videoOffset, (int)videoLength);
+            byte[] expectedHash = ReadRange(stream, hashOffset, (int)hashLength);
+
+            if (!VerifyPackageHash(metadataBytes, videoBytes, expectedHash))
+                throw new InvalidOperationException("Package integrity check failed.");
 
             PackageMetadata? metadata = JsonSerializer.Deserialize<PackageMetadata>(metadataBytes);
             if (metadata == null)
@@ -103,6 +119,20 @@ namespace secure_player.MediaPackage
             }
 
             return buffer;
+        }
+
+        private static bool VerifyPackageHash(byte[] metadataBytes, byte[] videoBytes, byte[] expectedHash)
+        {
+            using SHA256 sha256 = SHA256.Create();
+
+            byte[] combined = new byte[metadataBytes.Length + videoBytes.Length];
+
+            Buffer.BlockCopy(metadataBytes, 0, combined, 0, metadataBytes.Length);
+            Buffer.BlockCopy(videoBytes, 0, combined, metadataBytes.Length, videoBytes.Length);
+
+            byte[] actualHash = sha256.ComputeHash(combined);
+
+            return CryptographicOperations.FixedTimeEquals(actualHash, expectedHash);
         }
     }
 }

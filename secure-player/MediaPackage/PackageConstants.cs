@@ -7,7 +7,8 @@ namespace secure_player.MediaPackage
     internal static class PackageConstants
     {
         public const string FooterMagic = "SPKGFOOT";
-        public const int FooterSize = 48;
-        public const int Version = 2;
+        public const int FooterSize = 64;
+        public const int Version = 3;
+        public const int Sha256HashSize = 32;
     }
 }

@@ -40,12 +40,23 @@ namespace secure_player
             if (string.IsNullOrWhiteSpace(exePath))
                 return;
 
-            if (PackageReader.TryReadEmbeddedPackage(exePath, out PackagePayload? payload))
+            try
             {
-                if (!string.IsNullOrWhiteSpace(payload.Metadata.Title))
-                    Title = payload.Metadata.Title;
+                if (PackageReader.TryReadEmbeddedPackage(exePath, out PackagePayload? payload))
+                {
+                    if (!string.IsNullOrWhiteSpace(payload.Metadata.Title))
+                        Title = payload.Metadata.Title;
 
-                await LoadVideoBytesAsync(payload.VideoBytes);
+                    await LoadVideoBytesAsync(payload.VideoBytes);
+                }
+            }
+            catch (InvalidOperationException ex)
+            {
+                MessageBox.Show(
+                    ex.Message,
+                    "Package Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
             }
         }
 
