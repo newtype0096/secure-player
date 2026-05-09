@@ -1,3 +1,4 @@
 <Solution>
+  <Project Path="secure-player-export/secure-player-export.csproj" Id="3cdee79b-3ad7-469f-b50c-850a34627750" />
   <Project Path="secure-player/secure-player.csproj" />
 </Solution>
