@@ -11,6 +11,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
 using Microsoft.Win32;
+using secure_player.MediaPackage;
 
 namespace secure_player
 {
@@ -34,6 +35,15 @@ namespace secure_player
             PositionSlider.Minimum = 0;
             PositionSlider.Maximum = 0;
             PositionSlider.Value = 0;
+
+            string? exePath = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(exePath))
+                return;
+
+            if (PackageReader.TryReadEmbeddedVideo(exePath, out byte[] videoBytes))
+            {
+                await LoadVideoBytesAsync(videoBytes);
+            }
         }
 
         private void OnPositionChanged(object? sender, TimeSpan position)
@@ -74,7 +84,13 @@ namespace secure_player
             });
         }
 
-        private async Task LoadVideoAsync(string filePath)
+        private async Task LoadVideoFileAsync(string filePath)
+        {
+            byte[] bytes = await File.ReadAllBytesAsync(filePath);
+            await LoadVideoBytesAsync(bytes);
+        }
+
+        private async Task LoadVideoBytesAsync(byte[] bytes)
         {
             _player?.Pause();
             _player?.Dispose();
@@ -84,8 +100,6 @@ namespace secure_player
 
             PositionSlider.Value = 0;
             PositionSlider.Maximum = 0;
-
-            byte[] bytes = await File.ReadAllBytesAsync(filePath);
 
             _player = new FFmpegMemoryVideoPlayer();
             _player.FrameReady += OnFrameReady;
@@ -111,7 +125,7 @@ namespace secure_player
             if (result != true)
                 return;
 
-            await LoadVideoAsync(dialog.FileName);
+            await LoadVideoFileAsync(dialog.FileName);
         }
 
         private void PlayButton_Click(object sender, RoutedEventArgs e)
