@@ -34,6 +34,11 @@ namespace secure_player.Playback
 
         private readonly object _ffmpegLock = new();
 
+        private readonly object _timingLock = new();
+
+        private TimeSpan? _playbackBaseMediaTime;
+        private DateTime _playbackBaseWallTime;
+
         public TimeSpan Duration { get; private set; }
         public TimeSpan Position { get; private set; }
         public bool IsPlaying => _isPlaying;
@@ -129,6 +134,13 @@ namespace secure_player.Playback
                 _playbackCts = new CancellationTokenSource();
 
                 _isPlaying = true;
+
+                lock (_timingLock)
+                {
+                    _playbackBaseMediaTime = Position;
+                    _playbackBaseWallTime = DateTime.UtcNow;
+                }
+
                 _playbackTask = Task.Run(() => DecodeLoop(_playbackCts.Token));
             }
         }
@@ -157,6 +169,12 @@ namespace secure_player.Playback
             _reachedEnd = false;
             Position = TimeSpan.Zero;
             PositionChanged?.Invoke(this, Position);
+
+            lock (_timingLock)
+            {
+                _playbackBaseMediaTime = TimeSpan.Zero;
+                _playbackBaseWallTime = DateTime.UtcNow;
+            }
         }
 
         public Task SeekAsync(TimeSpan position, CancellationToken cancellationToken = default)
@@ -181,12 +199,23 @@ namespace secure_player.Playback
             Position = position;
             PositionChanged?.Invoke(this, Position);
 
+            lock (_timingLock)
+            {
+                _playbackBaseMediaTime = position;
+                _playbackBaseWallTime = DateTime.UtcNow;
+            }
+
             return Task.CompletedTask;
         }
 
         public void SetSpeed(double speed)
         {
-            _speed = Math.Clamp(speed, 0.25, 4.0);
+            lock (_timingLock)
+            {
+                _speed = Math.Clamp(speed, 0.25, 4.0);
+                _playbackBaseMediaTime = Position;
+                _playbackBaseWallTime = DateTime.UtcNow;
+            }
         }
 
         private int ReadPacket(void* opaque, byte* buffer, int bufferSize)
@@ -209,7 +238,6 @@ namespace secure_player.Playback
         {
             AVPacket* packet = ffmpeg.av_packet_alloc();
             AVFrame* frame = ffmpeg.av_frame_alloc();
-            AVFrame* bgraFrame = ffmpeg.av_frame_alloc();
             SwsContext* swsContext = null;
 
             try
@@ -290,6 +318,8 @@ namespace secure_player.Playback
 
                                     TimeSpan timestamp = GetFrameTimestamp(frame);
 
+                                    WaitForFramePresentation(timestamp, cancellationToken);
+
                                     Position = timestamp;
                                     PositionChanged?.Invoke(this, Position);
 
@@ -301,8 +331,6 @@ namespace secure_player.Playback
                                         Stride = stride,
                                         Timestamp = timestamp
                                     });
-
-                                    Thread.Sleep(TimeSpan.FromMilliseconds(33 / _speed));
                                 }
                             }
                             finally
@@ -318,7 +346,6 @@ namespace secure_player.Playback
                 if (swsContext != null)
                     ffmpeg.sws_freeContext(swsContext);
 
-                ffmpeg.av_frame_free(&bgraFrame);
                 ffmpeg.av_frame_free(&frame);
                 ffmpeg.av_packet_free(&packet);
 
@@ -352,6 +379,45 @@ namespace secure_player.Playback
             AVRational timeBase = _formatContext->streams[_videoStreamIndex]->time_base;
             double seconds = pts * ffmpeg.av_q2d(timeBase);
             return TimeSpan.FromSeconds(seconds);
+        }
+
+        private void WaitForFramePresentation(TimeSpan frameTimestamp, CancellationToken cancellationToken)
+        {
+            TimeSpan baseMediaTime;
+            DateTime baseWallTime;
+            double speed;
+
+            lock (_timingLock)
+            {
+                baseMediaTime = _playbackBaseMediaTime ?? Position;
+                baseWallTime = _playbackBaseWallTime;
+                speed = _speed;
+            }
+
+            TimeSpan mediaElapsed = frameTimestamp - baseMediaTime;
+
+            if (mediaElapsed < TimeSpan.Zero)
+                return;
+
+            TimeSpan targetWallElapsed = TimeSpan.FromTicks((long)(mediaElapsed.Ticks / speed));
+            DateTime targetWallTime = baseWallTime + targetWallElapsed;
+
+            TimeSpan delay = targetWallTime - DateTime.UtcNow;
+
+            if (delay <= TimeSpan.Zero)
+                return;
+
+            if (delay > TimeSpan.FromMilliseconds(500))
+                delay = TimeSpan.FromMilliseconds(500);
+
+            try
+            {
+                Task.Delay(delay, cancellationToken).Wait(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+
+            }
         }
 
         private void CloseCurrent()
