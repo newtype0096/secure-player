@@ -1,5 +1,9 @@
-﻿using secure_player.Playback;
+﻿using Microsoft.Win32;
+using secure_player.Crypto;
+using secure_player.MediaPackage;
+using secure_player.Playback;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -10,8 +14,6 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
-using Microsoft.Win32;
-using secure_player.MediaPackage;
 
 namespace secure_player
 {
@@ -47,7 +49,37 @@ namespace secure_player
                     if (!string.IsNullOrWhiteSpace(payload.Metadata.Title))
                         Title = payload.Metadata.Title;
 
-                    await LoadVideoBytesAsync(payload.VideoBytes);
+                    PasswordDialog dialog = new()
+                    {
+                        Owner = this
+                    };
+
+                    if (dialog.ShowDialog() != true)
+                        return;
+
+                    byte[] videoBytes;
+
+                    try
+                    {
+                        videoBytes = PasswordVideoDecryptor.Decrypt(
+                            payload.EncryptedVideoBytes,
+                            payload.Salt,
+                            payload.Nonce,
+                            payload.Tag,
+                            dialog.Password);
+                    }
+                    catch (CryptographicException)
+                    {
+                        MessageBox.Show(
+                            "비밀번호가 올바르지 않거나 파일이 손상되었습니다.",
+                            "Decrypt Failed",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Error);
+
+                        return;
+                    }
+
+                    await LoadVideoBytesAsync(videoBytes);
                 }
             }
             catch (InvalidOperationException ex)

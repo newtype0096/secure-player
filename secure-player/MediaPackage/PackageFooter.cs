@@ -8,8 +8,14 @@ namespace secure_player.MediaPackage
         int Version,
         long MetadataOffset,
         long MetadataLength,
-        long VideoOffset,
-        long VideoLength,
+        long EncryptedVideoOffset,
+        long EncryptedVideoLength,
+        long SaltOffset,
+        long SaltLength,
+        long NonceOffset,
+        long NonceLength,
+        long TagOffset,
+        long TagLength,
         long HashOffset,
         long HashLength);
 }

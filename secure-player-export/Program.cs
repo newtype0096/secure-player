@@ -3,14 +3,97 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-static byte[] ComputePackageHash(byte[] metadataBytes, byte[] videoBytes)
+const int SaltSize = 16;
+const int NonceSize = 12;
+const int TagSize = 16;
+const int AesKeySize = 32;
+const int Pbkdf2Iterations = 200_000;
+
+static (byte[] EncryptedVideoBytes, byte[] Salt, byte[] Nonce, byte[] Tag)
+EncryptVideo(byte[] videoBytes, string password)
+{
+    byte[] salt = RandomNumberGenerator.GetBytes(SaltSize);
+    byte[] nonce = RandomNumberGenerator.GetBytes(NonceSize);
+    byte[] tag = new byte[TagSize];
+    byte[] encrypted = new byte[videoBytes.Length];
+
+    byte[] key = Rfc2898DeriveBytes.Pbkdf2(
+        password,
+        salt,
+        Pbkdf2Iterations,
+        HashAlgorithmName.SHA256,
+        AesKeySize);
+
+    using AesGcm aes = new(key, TagSize);
+    aes.Encrypt(nonce, videoBytes, encrypted, tag);
+
+    CryptographicOperations.ZeroMemory(key);
+
+    return (encrypted, salt, nonce, tag);
+}
+
+static string ReadPassword()
+{
+    Console.Write("Password: ");
+
+    StringBuilder password = new();
+
+    while (true)
+    {
+        ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+
+        if (key.Key == ConsoleKey.Enter)
+        {
+            Console.WriteLine();
+            break;
+        }
+
+        if (key.Key == ConsoleKey.Backspace)
+        {
+            if (password.Length > 0)
+            {
+                password.Length--;
+                Console.Write("\b \b");
+            }
+
+            continue;
+        }
+
+        password.Append(key.KeyChar);
+        Console.Write("*");
+    }
+
+    return password.ToString();
+}
+
+static byte[] ComputePackageHash(byte[] metadataBytes, byte[] encryptedVideoBytes, byte[] salt, byte[] nonce, byte[] tag)
 {
     using SHA256 sha256 = SHA256.Create();
 
-    byte[] combined = new byte[metadataBytes.Length + videoBytes.Length];
+    int length =
+        metadataBytes.Length +
+        encryptedVideoBytes.Length +
+        salt.Length +
+        nonce.Length +
+        tag.Length;
 
-    Buffer.BlockCopy(metadataBytes, 0, combined, 0, metadataBytes.Length);
-    Buffer.BlockCopy(videoBytes, 0, combined, metadataBytes.Length, videoBytes.Length);
+    byte[] combined = new byte[length];
+
+    int offset = 0;
+
+    Buffer.BlockCopy(metadataBytes, 0, combined, offset, metadataBytes.Length);
+    offset += metadataBytes.Length;
+
+    Buffer.BlockCopy(encryptedVideoBytes, 0, combined, offset, encryptedVideoBytes.Length);
+    offset += encryptedVideoBytes.Length;
+
+    Buffer.BlockCopy(salt, 0, combined, offset, salt.Length);
+    offset += salt.Length;
+
+    Buffer.BlockCopy(nonce, 0, combined, offset, nonce.Length);
+    offset += nonce.Length;
+
+    Buffer.BlockCopy(tag, 0, combined, offset, tag.Length);
 
     return sha256.ComputeHash(combined);
 }
@@ -20,9 +103,12 @@ static void VerifyPackage(string packedExePath)
     using FileStream stream = File.OpenRead(packedExePath);
 
     const string footerMagic = "SPKGFOOT";
-    const int footerSize = 64;
-    const int version = 3;
+    const int footerSize = 112;
+    const int version = 4;
     const int sha256HashSize = 32;
+    const int saltSize = 16;
+    const int nonceSize = 12;
+    const int tagSize = 16;
 
     if (stream.Length < footerSize)
         throw new InvalidOperationException("Package footer not found.");
@@ -45,40 +131,67 @@ static void VerifyPackage(string packedExePath)
 
     long metadataOffset = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(16, 8));
     long metadataLength = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(24, 8));
-    long videoOffset = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(32, 8));
-    long videoLength = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(40, 8));
-    long hashOffset = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(48, 8));
-    long hashLength = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(56, 8));
+    long encryptedVideoOffset = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(32, 8));
+    long encryptedVideoLength = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(40, 8));
+    long saltOffset = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(48, 8));
+    long saltLength = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(56, 8));
+    long nonceOffset = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(64, 8));
+    long nonceLength = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(72, 8));
+    long tagOffset = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(80, 8));
+    long tagLength = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(88, 8));
+    long hashOffset = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(96, 8));
+    long hashLength = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(104, 8));
 
     long packageEnd = stream.Length - footerSize;
 
     if (!IsValidPackageRange(metadataOffset, metadataLength, packageEnd))
         throw new InvalidOperationException("Invalid metadata range.");
 
-    if (!IsValidPackageRange(videoOffset, videoLength, packageEnd))
+    if (!IsValidPackageRange(encryptedVideoOffset, encryptedVideoLength, packageEnd))
         throw new InvalidOperationException("Invalid video range.");
+
+    if (!IsValidPackageRange(saltOffset, saltLength, packageEnd))
+        throw new InvalidOperationException("Invalid salt range.");
+
+    if (!IsValidPackageRange(nonceOffset, nonceLength, packageEnd))
+        throw new InvalidOperationException("Invalid nonce range.");
+
+    if (!IsValidPackageRange(tagOffset, tagLength, packageEnd))
+        throw new InvalidOperationException("Invalid tag range.");
 
     if (!IsValidPackageRange(hashOffset, hashLength, packageEnd))
         throw new InvalidOperationException("Invalid hash range.");
 
+    if (saltLength != saltSize)
+        throw new InvalidOperationException($"Invalid salt length: {saltLength}");
+
+    if (nonceLength != nonceSize)
+        throw new InvalidOperationException($"Invalid nonce length: {nonceLength}");
+
+    if (tagLength != tagSize)
+        throw new InvalidOperationException($"Invalid tag length: {tagLength}");
+
     if (hashLength != sha256HashSize)
         throw new InvalidOperationException($"Invalid hash length: {hashLength}");
 
-    if (metadataLength > int.MaxValue || videoLength > int.MaxValue || hashLength > int.MaxValue)
+    if (metadataLength > int.MaxValue || encryptedVideoLength > int.MaxValue || hashLength > int.MaxValue)
         throw new InvalidOperationException("Package section is too large for current verifier.");
 
     byte[] metadataBytes = ReadRange(stream, metadataOffset, (int)metadataLength);
-    byte[] videoBytes = ReadRange(stream, videoOffset, (int)videoLength);
+    byte[] encryptedVideoBytes = ReadRange(stream, encryptedVideoOffset, (int)encryptedVideoLength);
+    byte[] salt = ReadRange(stream, saltOffset, (int)saltLength);
+    byte[] nonce = ReadRange(stream, nonceOffset, (int)nonceLength);
+    byte[] tag = ReadRange(stream, tagOffset, (int)tagLength);
     byte[] expectedHash = ReadRange(stream, hashOffset, (int)hashLength);
 
-    if (!VerifyPackageHash(metadataBytes, videoBytes, expectedHash))
+    if (!VerifyPackageHash(metadataBytes, encryptedVideoBytes, salt, nonce, tag, expectedHash))
         throw new InvalidOperationException("Package integrity check failed.");
 
     using JsonDocument metadata = JsonDocument.Parse(metadataBytes);
 
     Console.WriteLine("Package valid");
     Console.WriteLine($"MetadataLength: {metadataLength}");
-    Console.WriteLine($"VideoLength: {videoLength}");
+    Console.WriteLine($"VideoLength: {encryptedVideoLength}");
     Console.WriteLine($"HashLength: {hashLength}");
 
     if (metadata.RootElement.TryGetProperty("Title", out JsonElement title))
@@ -127,14 +240,40 @@ static byte[] ReadRange(FileStream stream, long offset, int length)
     return buffer;
 }
 
-static bool VerifyPackageHash(byte[] metadataBytes, byte[] videoBytes, byte[] expectedHash)
+static bool VerifyPackageHash(
+    byte[] metadataBytes,
+    byte[] encryptedVideoBytes,
+    byte[] salt,
+    byte[] nonce,
+    byte[] tag,
+    byte[] expectedHash)
 {
     using SHA256 sha256 = SHA256.Create();
 
-    byte[] combined = new byte[metadataBytes.Length + videoBytes.Length];
+    int length =
+        metadataBytes.Length +
+        encryptedVideoBytes.Length +
+        salt.Length +
+        nonce.Length +
+        tag.Length;
 
-    Buffer.BlockCopy(metadataBytes, 0, combined, 0, metadataBytes.Length);
-    Buffer.BlockCopy(videoBytes, 0, combined, metadataBytes.Length, videoBytes.Length);
+    byte[] combined = new byte[length];
+
+    int offset = 0;
+
+    Buffer.BlockCopy(metadataBytes, 0, combined, offset, metadataBytes.Length);
+    offset += metadataBytes.Length;
+
+    Buffer.BlockCopy(encryptedVideoBytes, 0, combined, offset, encryptedVideoBytes.Length);
+    offset += encryptedVideoBytes.Length;
+
+    Buffer.BlockCopy(salt, 0, combined, offset, salt.Length);
+    offset += salt.Length;
+
+    Buffer.BlockCopy(nonce, 0, combined, offset, nonce.Length);
+    offset += nonce.Length;
+
+    Buffer.BlockCopy(tag, 0, combined, offset, tag.Length);
 
     byte[] actualHash = sha256.ComputeHash(combined);
 
@@ -192,33 +331,73 @@ if (args.Length >= 1 && args[0].Equals("pack", StringComparison.OrdinalIgnoreCas
         WriteIndented = false
     });
 
-    byte[] hashBytes = ComputePackageHash(metadataBytes, videoBytes);
+    string password = ReadPassword();
+    Console.Write("Confirm ");
+    string confirm = ReadPassword();
+
+    if (password != confirm)
+        throw new InvalidOperationException("Passwords do not match.");
+
+    var encrypted = EncryptVideo(videoBytes, password);
+
+    byte[] encryptedVideoBytes = encrypted.EncryptedVideoBytes;
+    byte[] salt = encrypted.Salt;
+    byte[] nonce = encrypted.Nonce;
+    byte[] tag = encrypted.Tag;
+
+    byte[] hashBytes = ComputePackageHash(metadataBytes, encryptedVideoBytes, salt, nonce, tag);
 
     long metadataOffset = playerBytes.Length;
     long metadataLength = metadataBytes.Length;
-    long videoOffset = metadataOffset + metadataLength;
-    long videoLength = videoBytes.Length;
-    long hashOffset = videoOffset + videoLength;
+
+    long encryptedVideoOffset = metadataOffset + metadataLength;
+    long encryptedVideoLength = encryptedVideoBytes.Length;
+
+    long saltOffset = encryptedVideoOffset + encryptedVideoLength;
+    long saltLength = salt.Length;
+
+    long nonceOffset = saltOffset + saltLength;
+    long nonceLength = nonce.Length;
+
+    long tagOffset = nonceOffset + nonceLength;
+    long tagLength = tag.Length;
+
+    long hashOffset = tagOffset + tagLength;
     long hashLength = hashBytes.Length;
 
     using FileStream output = File.Create(outputExePath);
 
     output.Write(playerBytes);
     output.Write(metadataBytes);
-    output.Write(videoBytes);
+    output.Write(encryptedVideoBytes);
+    output.Write(salt);
+    output.Write(nonce);
+    output.Write(tag);
     output.Write(hashBytes);
 
-    Span<byte> footer = stackalloc byte[64];
+    Span<byte> footer = stackalloc byte[112];
 
     Encoding.ASCII.GetBytes("SPKGFOOT").CopyTo(footer);
-    BinaryPrimitives.WriteInt32LittleEndian(footer.Slice(8, 4), 3);
+    BinaryPrimitives.WriteInt32LittleEndian(footer.Slice(8, 4), 4);
     BinaryPrimitives.WriteInt32LittleEndian(footer.Slice(12, 4), 0);
+
     BinaryPrimitives.WriteInt64LittleEndian(footer.Slice(16, 8), metadataOffset);
     BinaryPrimitives.WriteInt64LittleEndian(footer.Slice(24, 8), metadataLength);
-    BinaryPrimitives.WriteInt64LittleEndian(footer.Slice(32, 8), videoOffset);
-    BinaryPrimitives.WriteInt64LittleEndian(footer.Slice(40, 8), videoLength);
-    BinaryPrimitives.WriteInt64LittleEndian(footer.Slice(48, 8), hashOffset);
-    BinaryPrimitives.WriteInt64LittleEndian(footer.Slice(56, 8), hashLength);
+
+    BinaryPrimitives.WriteInt64LittleEndian(footer.Slice(32, 8), encryptedVideoOffset);
+    BinaryPrimitives.WriteInt64LittleEndian(footer.Slice(40, 8), encryptedVideoLength);
+
+    BinaryPrimitives.WriteInt64LittleEndian(footer.Slice(48, 8), saltOffset);
+    BinaryPrimitives.WriteInt64LittleEndian(footer.Slice(56, 8), saltLength);
+
+    BinaryPrimitives.WriteInt64LittleEndian(footer.Slice(64, 8), nonceOffset);
+    BinaryPrimitives.WriteInt64LittleEndian(footer.Slice(72, 8), nonceLength);
+
+    BinaryPrimitives.WriteInt64LittleEndian(footer.Slice(80, 8), tagOffset);
+    BinaryPrimitives.WriteInt64LittleEndian(footer.Slice(88, 8), tagLength);
+
+    BinaryPrimitives.WriteInt64LittleEndian(footer.Slice(96, 8), hashOffset);
+    BinaryPrimitives.WriteInt64LittleEndian(footer.Slice(104, 8), hashLength);
 
     output.Write(footer);
 }
