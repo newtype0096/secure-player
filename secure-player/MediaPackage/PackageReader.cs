@@ -3,14 +3,15 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Text.Json;
 
 namespace secure_player.MediaPackage
 {
     internal static class PackageReader
     {
-        public static bool TryReadEmbeddedVideo(string exePath, out byte[] videoBytes)
+        public static bool TryReadEmbeddedPackage(string exePath, out PackagePayload? payload)
         {
-            videoBytes = [];
+            payload = null;
 
             using FileStream stream = File.OpenRead(exePath);
 
@@ -33,33 +34,75 @@ namespace secure_player.MediaPackage
             if (version != PackageConstants.Version)
                 return false;
 
-            long videoOffset = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(16, 8));
-            long videoLength = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(24, 8));
+            long metadataOffset = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(16, 8));
+            long metadataLength = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(24, 8));
+            long videoOffset = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(32, 8));
+            long videoLength = BinaryPrimitives.ReadInt64LittleEndian(footerBuffer.Slice(40, 8));
 
-            if (videoOffset < 0 || videoLength <= 0)
+            if (!IsValidRange(metadataOffset, metadataLength, stream.Length))
                 return false;
 
-            if (videoOffset + videoLength > stream.Length - PackageConstants.FooterSize)
+            if (!IsValidRange(videoOffset, videoLength, stream.Length))
                 return false;
 
-            if (videoLength > int.MaxValue)
-                throw new InvalidOperationException("Video is too large for current byte[] loader.");
+            long packageEnd = stream.Length - PackageConstants.FooterSize;
 
-            videoBytes = new byte[videoLength];
+            if (metadataOffset + metadataLength > packageEnd)
+                return false;
 
-            stream.Position = videoOffset;
-            int totalRead = 0;
+            if (videoOffset + videoLength > packageEnd)
+                return false;
 
-            while (totalRead < videoBytes.Length)
+            if (metadataLength > int.MaxValue || videoLength > int.MaxValue)
+                throw new InvalidOperationException("Package section is too large for current loader.");
+
+            byte[] metadataBytes = ReadRange(stream, metadataOffset, (int)metadataLength);
+            byte[] videoBytes = ReadRange(stream, videoOffset, (int)videoLength);
+
+            PackageMetadata? metadata = JsonSerializer.Deserialize<PackageMetadata>(metadataBytes);
+            if (metadata == null)
+                return false;
+
+            payload = new PackagePayload
             {
-                int chunk = stream.Read(videoBytes, totalRead, videoBytes.Length - totalRead);
-                if (chunk == 0)
-                    throw new EndOfStreamException();
-
-                totalRead += chunk;
-            }
+                Metadata = metadata,
+                VideoBytes = videoBytes
+            };
 
             return true;
+        }
+
+        private static bool IsValidRange(long offset, long length, long fileLength)
+        {
+            if (offset < 0 || length <= 0)
+                return false;
+
+            if (offset > fileLength)
+                return false;
+
+            if (length > fileLength - offset)
+                return false;
+
+            return true;
+        }
+
+        private static byte[] ReadRange(FileStream stream, long offset, int length)
+        {
+            byte[] buffer = new byte[length];
+
+            stream.Position = offset;
+
+            int totalRead = 0;
+            while (totalRead < buffer.Length)
+            {
+                int read = stream.Read(buffer, totalRead, buffer.Length - totalRead);
+                if (read == 0)
+                    throw new EndOfStreamException();
+
+                totalRead += read;
+            }
+
+            return buffer;
         }
     }
 }

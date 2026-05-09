@@ -40,9 +40,12 @@ namespace secure_player
             if (string.IsNullOrWhiteSpace(exePath))
                 return;
 
-            if (PackageReader.TryReadEmbeddedVideo(exePath, out byte[] videoBytes))
+            if (PackageReader.TryReadEmbeddedPackage(exePath, out PackagePayload? payload))
             {
-                await LoadVideoBytesAsync(videoBytes);
+                if (!string.IsNullOrWhiteSpace(payload.Metadata.Title))
+                    Title = payload.Metadata.Title;
+
+                await LoadVideoBytesAsync(payload.VideoBytes);
             }
         }
 

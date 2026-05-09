@@ -6,6 +6,8 @@ namespace secure_player.MediaPackage
 {
     internal readonly record struct PackageFooter(
         int Version,
+        long MetadataOffset,
+        long MetadataLength,
         long VideoOffset,
         long VideoLength);
 }
