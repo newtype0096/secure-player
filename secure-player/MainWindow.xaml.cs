@@ -73,6 +73,11 @@ namespace secure_player
             _player?.Pause();
         }
 
+        private void StopButton_Click(object sender, RoutedEventArgs e)
+        {
+            _player?.Stop();
+        }
+
         private void Speed1xButton_Click(object sender, RoutedEventArgs e)
         {
             _player?.SetSpeed(1.0);

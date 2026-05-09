@@ -163,7 +163,113 @@ namespace secure_player.Playback
 
         private void DecodeLoop(CancellationToken cancellationToken)
         {
+            AVPacket* packet = ffmpeg.av_packet_alloc();
+            AVFrame* frame = ffmpeg.av_frame_alloc();
+            AVFrame* bgraFrame = ffmpeg.av_frame_alloc();
+            SwsContext* swsContext = null;
 
+            try
+            {
+                int width = _codecContext->width;
+                int height = _codecContext->height;
+                int stride = width * 4;
+                int bufferSize = stride * height;
+
+                byte[] managedBuffer = new byte[bufferSize];
+
+                fixed (byte* bufferPtr = managedBuffer)
+                {
+                    byte_ptrArray4 dstData = default;
+                    int_array4 dstLinesize = default;
+
+                    dstData[0] = bufferPtr;
+                    dstLinesize[0] = stride;
+
+                    swsContext = ffmpeg.sws_getContext(
+                        width,
+                        height,
+                        _codecContext->pix_fmt,
+                        width,
+                        height,
+                        AVPixelFormat.AV_PIX_FMT_BGRA,
+                        (int)SwsFlags.SWS_BILINEAR,
+                        null,
+                        null,
+                        null);
+
+                    if (swsContext == null)
+                        throw new InvalidOperationException("Failed to create sws context.");
+
+                    while (!cancellationToken.IsCancellationRequested)
+                    {
+                        int readResult = ffmpeg.av_read_frame(_formatContext, packet);
+                        if (readResult < 0)
+                            break;
+
+                        try
+                        {
+                            if (packet->stream_index != _videoStreamIndex)
+                                continue;
+
+                            ThrowIfError(ffmpeg.avcodec_send_packet(_codecContext, packet));
+
+                            while (!cancellationToken.IsCancellationRequested)
+                            {
+                                int receiveResult = ffmpeg.avcodec_receive_frame(_codecContext, frame);
+
+                                if (receiveResult == ffmpeg.AVERROR(ffmpeg.EAGAIN) ||
+                                    receiveResult == ffmpeg.AVERROR_EOF)
+                                    break;
+
+                                ThrowIfError(receiveResult);
+
+                                ffmpeg.sws_scale(
+                                    swsContext,
+                                    frame->data,
+                                    frame->linesize,
+                                    0,
+                                    height,
+                                    dstData,
+                                    dstLinesize);
+
+                                byte[] copy = new byte[bufferSize];
+                                Buffer.BlockCopy(managedBuffer, 0, copy, 0, bufferSize);
+
+                                TimeSpan timestamp = GetFrameTimestamp(frame);
+
+                                Position = timestamp;
+                                PositionChanged?.Invoke(this, Position);
+
+                                FrameReady?.Invoke(this, new VideoFrame
+                                {
+                                    BgraBuffer = copy,
+                                    Width = width,
+                                    Height = height,
+                                    Stride = stride,
+                                    Timestamp = timestamp
+                                });
+
+                                Thread.Sleep(TimeSpan.FromMilliseconds(33 / _speed));
+                            }
+                        }
+                        finally
+                        {
+                            ffmpeg.av_packet_unref(packet);
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                if (swsContext != null)
+                    ffmpeg.sws_freeContext(swsContext);
+
+                ffmpeg.av_frame_free(&bgraFrame);
+                ffmpeg.av_frame_free(&frame);
+                ffmpeg.av_packet_free(&packet);
+
+                _isPlaying = false;
+            }
         }
 
         private static void ThrowIfError(int error)
@@ -178,6 +284,17 @@ namespace secure_player.Playback
                 string message = Marshal.PtrToStringAnsi((IntPtr)ptr) ?? $"FFmpeg error {error}";
                 throw new InvalidOperationException(message);
             }
+        }
+
+        private TimeSpan GetFrameTimestamp(AVFrame* frame)
+        {
+            long pts = frame->best_effort_timestamp;
+            if (pts < 0 || _formatContext == null || _videoStreamIndex < 0)
+                return Position;
+
+            AVRational timeBase = _formatContext->streams[_videoStreamIndex]->time_base;
+            double seconds = pts * ffmpeg.av_q2d(timeBase);
+            return TimeSpan.FromSeconds(seconds);
         }
 
         private void CloseCurrent()
