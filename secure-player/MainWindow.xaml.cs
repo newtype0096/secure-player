@@ -38,7 +38,7 @@ namespace secure_player
 
         private void OnFrameReady(object? sender, VideoFrame frame)
         {
-            Dispatcher.Invoke(() =>
+            Dispatcher.BeginInvoke(() =>
             {
                 if (_bitmap == null ||
                     _bitmap.PixelWidth != frame.Width ||

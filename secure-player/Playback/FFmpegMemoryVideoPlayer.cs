@@ -28,6 +28,10 @@ namespace secure_player.Playback
         private avio_alloc_context_read_packet? _readPacket;
         private avio_alloc_context_seek? _seek;
 
+        private readonly object _stateLock = new();
+        private bool _isOpened;
+        private bool _reachedEnd;
+
         public TimeSpan Duration { get; private set; }
         public TimeSpan Position { get; private set; }
         public bool IsPlaying => _isPlaying;
@@ -93,29 +97,64 @@ namespace secure_player.Playback
             if (_formatContext->duration > 0)
                 Duration = TimeSpan.FromSeconds(_formatContext->duration / (double)ffmpeg.AV_TIME_BASE);
 
+            _isOpened = true;
+            _reachedEnd = false;
+            Position = TimeSpan.Zero;
+
             return Task.CompletedTask;
         }
 
         public void Play()
         {
-            if (_isPlaying)
-                return;
+            lock (_stateLock)
+            {
+                if (!_isOpened)
+                    return;
 
-            _isPlaying = true;
-            _playbackCts = new CancellationTokenSource();
-            _playbackTask = Task.Run(() => DecodeLoop(_playbackCts.Token));
+                if (_isPlaying)
+                    return;
+
+                if (_playbackTask != null && !_playbackTask.IsCompleted)
+                    return;
+
+                if (_reachedEnd)
+                {
+                    SeekAsync(TimeSpan.Zero).GetAwaiter().GetResult();
+                    _reachedEnd = false;
+                }
+
+                _playbackCts?.Dispose();
+                _playbackCts = new CancellationTokenSource();
+
+                _isPlaying = true;
+                _playbackTask = Task.Run(() => DecodeLoop(_playbackCts.Token));
+            }
         }
 
         public void Pause()
         {
-            _isPlaying = false;
-            _playbackCts?.Cancel();
+            lock (_stateLock)
+            {
+                if (!_isPlaying)
+                    return;
+
+                _isPlaying = false;
+                _playbackCts?.Cancel();
+            }
         }
 
         public void Stop()
         {
             Pause();
+
+            if (!_isOpened)
+                return;
+
+            SeekAsync(TimeSpan.Zero).GetAwaiter().GetResult();
+
+            _reachedEnd = false;
             Position = TimeSpan.Zero;
+            PositionChanged?.Invoke(this, Position);
         }
 
         public Task SeekAsync(TimeSpan position, CancellationToken cancellationToken = default)
@@ -203,6 +242,13 @@ namespace secure_player.Playback
                     while (!cancellationToken.IsCancellationRequested)
                     {
                         int readResult = ffmpeg.av_read_frame(_formatContext, packet);
+
+                        if (readResult == ffmpeg.AVERROR_EOF)
+                        {
+                            _reachedEnd = true;
+                            break;
+                        }
+
                         if (readResult < 0)
                             break;
 
@@ -268,7 +314,10 @@ namespace secure_player.Playback
                 ffmpeg.av_frame_free(&frame);
                 ffmpeg.av_packet_free(&packet);
 
-                _isPlaying = false;
+                lock (_stateLock)
+                {
+                    _isPlaying = false;
+                }
             }
         }
 
@@ -321,6 +370,9 @@ namespace secure_player.Playback
                 ffmpeg.avio_context_free(&avio);
                 _avioContext = null;
             }
+
+            _isOpened = false;
+            _reachedEnd = false;
         }
 
         public void Dispose()
