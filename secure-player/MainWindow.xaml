@@ -32,36 +32,42 @@
                     <ColumnDefinition />
                     <ColumnDefinition />
                     <ColumnDefinition />
+                    <ColumnDefinition />
                 </Grid.ColumnDefinitions>
 
                 <Button
-                    x:Name="PlayButton"
+                    x:Name="OpenButton"
                     Grid.Column="0"
+                    Click="OpenButton_Click"
+                    Content="열기" />
+                <Button
+                    x:Name="PlayButton"
+                    Grid.Column="1"
                     Click="PlayButton_Click"
                     Content="재생" />
                 <Button
                     x:Name="PauseButton"
-                    Grid.Column="1"
+                    Grid.Column="2"
                     Click="PauseButton_Click"
                     Content="일시정지" />
                 <Button
                     x:Name="StopButton"
-                    Grid.Column="2"
+                    Grid.Column="3"
                     Click="StopButton_Click"
                     Content="정지" />
                 <Button
                     x:Name="Speed1xButton"
-                    Grid.Column="3"
+                    Grid.Column="4"
                     Click="Speed1xButton_Click"
                     Content="1x" />
                 <Button
                     x:Name="Speed2xButton"
-                    Grid.Column="4"
+                    Grid.Column="5"
                     Click="Speed2xButton_Click"
                     Content="2x" />
                 <Button
                     x:Name="Speed4xButton"
-                    Grid.Column="5"
+                    Grid.Column="6"
                     Click="Speed4xButton_Click"
                     Content="4x" />
             </Grid>

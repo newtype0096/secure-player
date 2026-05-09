@@ -10,6 +10,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
+using Microsoft.Win32;
 
 namespace secure_player
 {
@@ -30,17 +31,9 @@ namespace secure_player
 
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
-            byte[] bytes = await File.ReadAllBytesAsync("C:\\Users\\M\\Desktop\\hevc_4k25P_main_2.mp4");
-
-            _player = new FFmpegMemoryVideoPlayer();
-            _player.FrameReady += OnFrameReady;
-
-            await _player.OpenAsync(bytes);
-
-            PositionSlider.Maximum = _player.Duration.TotalSeconds;
+            PositionSlider.Minimum = 0;
+            PositionSlider.Maximum = 0;
             PositionSlider.Value = 0;
-
-            _player.PositionChanged += OnPositionChanged;
         }
 
         private void OnPositionChanged(object? sender, TimeSpan position)
@@ -79,6 +72,46 @@ namespace secure_player
                     frame.Stride,
                     0);
             });
+        }
+
+        private async Task LoadVideoAsync(string filePath)
+        {
+            _player?.Pause();
+            _player?.Dispose();
+
+            _bitmap = null;
+            VideoImage.Source = null;
+
+            PositionSlider.Value = 0;
+            PositionSlider.Maximum = 0;
+
+            byte[] bytes = await File.ReadAllBytesAsync(filePath);
+
+            _player = new FFmpegMemoryVideoPlayer();
+            _player.FrameReady += OnFrameReady;
+            _player.PositionChanged += OnPositionChanged;
+
+            await _player.OpenAsync(bytes);
+
+            PositionSlider.Maximum = _player.Duration.TotalSeconds;
+            PositionSlider.Value = 0;
+        }
+
+        private async void OpenButton_Click(object sender, RoutedEventArgs e)
+        {
+            OpenFileDialog dialog = new()
+            {
+                Title = "영상 파일 선택",
+                Filter = "Video files|*.mp4;*.mov;*.mkv;*.avi;*.webm|All files|*.*",
+                CheckFileExists = true,
+                Multiselect = false
+            };
+
+            bool? result = dialog.ShowDialog(this);
+            if (result != true)
+                return;
+
+            await LoadVideoAsync(dialog.FileName);
         }
 
         private void PlayButton_Click(object sender, RoutedEventArgs e)
